@@ -1,0 +1,104 @@
+name: docflow-engine
+
+x-app-environment: &app-environment
+  DOCFLOW_ENVIRONMENT: ${DOCFLOW_ENVIRONMENT:-development}
+  DOCFLOW_DATABASE_URL: postgresql+asyncpg://docflow:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/docflow
+  DOCFLOW_API_KEY: ${DOCFLOW_API_KEY:-}
+  DOCFLOW_STORAGE_ROOT: /app/storage
+  DOCFLOW_PIPELINE_DIR: /app/config/pipelines
+  DOCFLOW_OCR_URL: http://ocr:8000/predict
+  DOCFLOW_LLM_BASE_URL: ${DOCFLOW_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+  DOCFLOW_LLM_MODEL: ${DOCFLOW_LLM_MODEL:-qwen2.5:14b}
+  DOCFLOW_LLM_API_KEY: ${DOCFLOW_LLM_API_KEY:-}
+  DOCFLOW_EMBEDDING_BASE_URL: ${DOCFLOW_EMBEDDING_BASE_URL:-http://host.docker.internal:11434/v1}
+  DOCFLOW_EMBEDDING_MODEL: ${DOCFLOW_EMBEDDING_MODEL:-bge-m3}
+  DOCFLOW_EMBEDDING_API_KEY: ${DOCFLOW_EMBEDDING_API_KEY:-}
+  DOCFLOW_MAX_UPLOAD_BYTES: ${DOCFLOW_MAX_UPLOAD_BYTES:-20971520}
+  DOCFLOW_MAX_PDF_PAGES: ${DOCFLOW_MAX_PDF_PAGES:-100}
+  DOCFLOW_WORKER_LEASE_SECONDS: ${DOCFLOW_WORKER_LEASE_SECONDS:-300}
+  DOCFLOW_WORKER_HEARTBEAT_SECONDS: ${DOCFLOW_WORKER_HEARTBEAT_SECONDS:-30}
+  DOCFLOW_LOG_LEVEL: ${DOCFLOW_LOG_LEVEL:-INFO}
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: docflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: docflow
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docflow -d docflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment: *app-environment
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  ocr:
+    build:
+      context: .
+      dockerfile: docker/ocr.Dockerfile
+    environment:
+      OCR_ALLOWED_LANGUAGES: rus,eng
+      OCR_CONCURRENCY: 2
+    ports:
+      - "127.0.0.1:8001:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build: .
+    environment: *app-environment
+    ports:
+      - "8000:8000"
+    volumes:
+      - storage_data:/app/storage
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      ocr:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["python", "run_worker.py"]
+    environment: *app-environment
+    volumes:
+      - storage_data:/app/storage
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      ocr:
+        condition: service_healthy
+    stop_grace_period: 2m
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  storage_data:

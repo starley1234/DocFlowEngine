@@ -1,0 +1,36 @@
+[project]
+name = "docflow-engine"
+version = "0.1.0"
+description = "Async document processing engine backed by PostgreSQL, OCR and OpenAI-compatible providers."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src", "main.py", "run_worker.py", "ocr_service"]
+
+[[tool.mypy.overrides]]
+module = ["pdf2image.*", "pgserver.*", "pytesseract.*"]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["src"]
+
+[tool.coverage.report]
+show_missing = true
